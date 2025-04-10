@@ -3,186 +3,135 @@ import json
 from pathlib import Path
 from html import escape
 
-ROOT = Path(__file__).parent.resolve()
+ROOT = Path(__file__).parent
 OUTPUT_HTML = ROOT / "index.html"
 OUTPUT_JSON = ROOT / "index-data.json"
 
-def scan_directory(path: Path):
+def collect_entries():
+    print("📁 正在扫描目录...")
     tree = {}
-    for item in sorted(path.iterdir()):
-        if item.name in [".git", ".github", "node_modules"]:
-            continue
-        if item.is_dir():
-            subtree = scan_directory(item)
-            if subtree:
-                tree[item.name] = subtree
-        elif item.suffix == ".html" and item.name != "index.html":
-            tree[item.name] = str(item.relative_to(ROOT)).replace("\\", "/")
+
+    for root, dirs, files in os.walk(ROOT):
+        root_path = Path(root)
+        rel_root = root_path.relative_to(ROOT).as_posix()
+        for file in files:
+            if file.endswith(".html") and file != "index.html":
+                rel_path = (root_path / file).relative_to(ROOT).as_posix()
+                parts = rel_path.split("/")
+                current = tree
+                for part in parts[:-1]:
+                    current = current.setdefault(part, {})
+                current[parts[-1]] = rel_path
+
+    print("✅ 文件结构采集完成，正在写入 index-data.json 和 index.html")
     return tree
 
-def write_json(tree):
+def write_json(data):
     with open(OUTPUT_JSON, "w", encoding="utf-8") as f:
-        json.dump(tree, f, ensure_ascii=False, indent=2)
+        json.dump(data, f, ensure_ascii=False, indent=2)
 
 def write_html():
     html = f"""<!DOCTYPE html>
 <html lang="zh">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta charset="UTF-8">
   <title>📚 我的笔记索引</title>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/lucide-static@latest/font/lucide.css">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <style>
-    body {{
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      margin: 0; padding: 0;
-      display: flex; height: 100vh; overflow: hidden;
-    }}
-    #sidebar {{
-      width: 320px; padding: 1rem; overflow-y: auto;
-      background: var(--bg); border-right: 1px solid #ccc;
-    }}
-    #main {{
-      flex: 1; padding: 2rem; overflow-y: auto;
-      background: var(--bg-alt);
-    }}
-    h1 {{ margin-top: 0; }}
-    .folder > summary {{ font-weight: bold; cursor: pointer; }}
-    .dark {{
-      --bg: #111;
-      --bg-alt: #181818;
-      --fg: #eee;
-    }}
-    .light {{
-      --bg: #fff;
-      --bg-alt: #f9f9f9;
-      --fg: #222;
-    }}
-    body {{
-      background: var(--bg);
-      color: var(--fg);
-    }}
-    a {{ color: #3b82f6; text-decoration: none; }}
+    body {{ font-family: sans-serif; margin: 0; display: flex; }}
+    nav {{ width: 300px; height: 100vh; overflow-y: auto; background: #f2f2f2; padding: 1rem; }}
+    #preview {{ flex: 1; padding: 2rem; overflow-y: auto; }}
+    ul {{ list-style: none; padding-left: 1rem; }}
+    li {{ margin: 0.3rem 0; }}
+    a {{ text-decoration: none; color: #0366d6; }}
     a:hover {{ text-decoration: underline; }}
-    .search-box {{
-      margin-bottom: 1rem;
-    }}
-    .active {{
-      font-weight: bold;
-      color: #16a34a;
-    }}
-    summary::marker {{
-      color: #999;
-    }}
-    .theme-toggle {{
-      cursor: pointer;
-      font-size: 0.9rem;
-      margin-bottom: 1rem;
-    }}
+    summary {{ cursor: pointer; font-weight: bold; }}
+    .active {{ font-weight: bold; color: #d6336c; }}
+    input {{ width: 100%; margin: 1rem 0; padding: 0.5rem; }}
   </style>
 </head>
-<body class="light">
-  <div id="sidebar">
-    <div class="theme-toggle">🌗 切换主题</div>
-    <div class="search-box">
-      <input type="text" id="search" placeholder="🔍 输入关键词搜索..." style="width:100%; padding:0.5rem;" />
-    </div>
-    <div id="tree">📁 正在加载目录...</div>
-  </div>
-  <div id="main">
-    <h1>📚 我的笔记索引</h1>
-    <div id="preview">点击左侧目录查看内容</div>
-  </div>
+<body>
+  <nav>
+    <h2>📚 我的笔记索引</h2>
+    <input type="text" placeholder="🔍 输入关键词搜索..." oninput="filterTree(this.value)">
+    <div id="tree"></div>
+  </nav>
+  <div id="preview">📄 点击左侧文件以加载页面内容...</div>
+
   <script>
-    const treeEl = document.getElementById('tree');
-    const previewEl = document.getElementById('preview');
-    const searchEl = document.getElementById('search');
+    async function loadData() {{
+      const basePath = location.pathname.endsWith('/') ? location.pathname : location.pathname.replace(/[^/]+$/, '');
+      const res = await fetch(basePath + 'index-data.json');
+      const tree = await res.json();
+      buildTree(tree, document.getElementById('tree'));
+    }}
 
-    function createNode(name, value) {{
-      if (typeof value === 'string') {{
+    function buildTree(obj, container) {{
+      const ul = document.createElement('ul');
+      for (const key in obj) {{
         const li = document.createElement('li');
-        const a = document.createElement('a');
-        a.href = '#' + value;
-        a.textContent = name;
-        li.appendChild(a);
-        return li;
-      }} else {{
-        const details = document.createElement('details');
-        details.classList.add('folder');
-        const summary = document.createElement('summary');
-        summary.textContent = name;
-        details.appendChild(summary);
-        const ul = document.createElement('ul');
-        for (const [k, v] of Object.entries(value)) {{
-          ul.appendChild(createNode(k, v));
+        if (typeof obj[key] === 'string') {{
+          const a = document.createElement('a');
+          a.textContent = key;
+          a.href = '#' + obj[key];
+          a.onclick = e => {{
+            e.preventDefault();
+            loadPreview(obj[key]);
+            highlightActiveLink(obj[key]);
+          }};
+          li.appendChild(a);
+        }} else {{
+          const details = document.createElement('details');
+          const summary = document.createElement('summary');
+          summary.textContent = key;
+          details.appendChild(summary);
+          buildTree(obj[key], details);
+          li.appendChild(details);
         }}
-        details.appendChild(ul);
-        return details;
+        ul.appendChild(li);
       }}
+      container.appendChild(ul);
     }}
 
-    function buildTree(data, keyword = '') {{
-      treeEl.innerHTML = '';
-      for (const [k, v] of Object.entries(data)) {{
-        const node = createNode(k, v);
-        if (keyword === '' || node.textContent.toLowerCase().includes(keyword.toLowerCase())) {{
-          treeEl.appendChild(node);
-        }}
-      }}
+    function loadPreview(path) {{
+      fetch(path)
+        .then(res => res.text())
+        .then(html => {{
+          const parser = new DOMParser();
+          const doc = parser.parseFromString(html, 'text/html');
+          const body = doc.querySelector('body');
+          document.getElementById('preview').innerHTML = body ? body.innerHTML : html;
+          window.scrollTo(0, 0);
+        }});
     }}
 
-    function getIndexJsonUrl() {{
-      const parts = location.pathname.split('/');
-      const base = parts.slice(0, parts.indexOf('index.html')).join('/');
-      return base + '/index-data.json';
-    }}
-
-    async function init() {{
-      const res = await fetch(getIndexJsonUrl());
-      const data = await res.json();
-      buildTree(data);
-
-      if (location.hash) {{
-        const path = decodeURIComponent(location.hash.slice(1));
-        loadPage(path);
-      }}
-    }}
-
-    async function loadPage(path) {{
-      const res = await fetch(path);
-      let text = await res.text();
-      if (path.endsWith('.md') || path.includes('.md.html')) {{
-        if (window.marked) {{
-          text = marked.parse(text);
-        }}
-      }}
-      previewEl.innerHTML = text;
-      document.querySelectorAll('#tree a').forEach(a => {{
+    function highlightActiveLink(path) {{
+      document.querySelectorAll('nav a').forEach(a => {{
         a.classList.toggle('active', a.getAttribute('href') === '#' + path);
       }});
     }}
 
-    searchEl.addEventListener('input', e => {{
-      init(); // 重建树
-    }});
+    function filterTree(query) {{
+      query = query.toLowerCase();
+      document.querySelectorAll('nav li').forEach(li => {{
+        const text = li.textContent.toLowerCase();
+        li.style.display = text.includes(query) ? '' : 'none';
+      }});
+    }}
 
-    window.addEventListener('hashchange', () => {{
-      const path = decodeURIComponent(location.hash.slice(1));
-      loadPage(path);
-    }});
-
-    document.querySelector('.theme-toggle').onclick = () => {{
-      document.body.classList.toggle('dark');
-      document.body.classList.toggle('light');
-    }};
-
-    init();
-
-    import('https://cdn.jsdelivr.net/npm/marked/marked.min.js').then(() => {{
-      if (location.hash) {{
+    // 初始化
+    window.addEventListener('DOMContentLoaded', () => {{
+      loadData();
+      if (location.hash.length > 1) {{
         const path = decodeURIComponent(location.hash.slice(1));
-        loadPage(path);
+        loadPreview(path);
+        highlightActiveLink(path);
       }}
+      window.addEventListener('hashchange', () => {{
+        const path = decodeURIComponent(location.hash.slice(1));
+        loadPreview(path);
+        highlightActiveLink(path);
+      }});
     }});
   </script>
 </body>
@@ -191,12 +140,10 @@ def write_html():
     OUTPUT_HTML.write_text(html, encoding="utf-8")
 
 def main():
-    print("📁 正在扫描目录...")
-    tree = scan_directory(ROOT)
-    print("✅ 文件结构采集完成，正在写入 index-data.json 和 index.html")
-    write_json(tree)
+    data = collect_entries()
+    write_json(data)
     write_html()
-    print("✅ 目录已生成！")
+    print("✅ 所有文件已生成")
 
 if __name__ == "__main__":
     main()
