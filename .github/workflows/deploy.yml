@@ -1,0 +1,32 @@
+name: Auto Generate Index
+
+on:
+  push:
+    branches: [master]  # 默认的部署分支
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v3
+        with:
+          persist-credentials: false  # 防止权限冲突
+
+      - name: 🐍 Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: 🧠 Run generate_index.py
+        run: python generate_index.py
+
+      - name: 📤 Commit updated index.html
+        run: |
+          git config --global user.name 'auto-bot'
+          git config --global user.email 'auto@bot.com'
+          git add index.html
+          git diff --cached --quiet || git commit -m "chore: auto-update index.html" && git push
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
