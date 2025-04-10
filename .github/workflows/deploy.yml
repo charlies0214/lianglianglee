@@ -2,7 +2,7 @@ name: Auto Generate Index
 
 on:
   push:
-    branches: [master]  # 默认的部署分支
+    branches: [main]
 
 jobs:
   generate:
@@ -12,7 +12,7 @@ jobs:
       - name: 📥 Checkout code
         uses: actions/checkout@v3
         with:
-          persist-credentials: false  # 防止权限冲突
+          token: ${{ secrets.GITHUB_TOKEN }}  # ✅ 开启写权限
 
       - name: 🐍 Setup Python
         uses: actions/setup-python@v4
@@ -25,8 +25,6 @@ jobs:
       - name: 📤 Commit updated index.html
         run: |
           git config --global user.name 'auto-bot'
-          git config --global user.email 'auto@bot.com'
+          git config --global user.email 'bot@users.noreply.github.com'
           git add index.html
           git diff --cached --quiet || git commit -m "chore: auto-update index.html" && git push
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
