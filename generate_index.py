@@ -1,60 +1,136 @@
 import os
+import json
 from pathlib import Path
-from html import escape
 
 ROOT = Path(__file__).parent
-OUTPUT = ROOT / "index.html"
-ICON = "📄"
+OUTPUT_HTML = ROOT / "index.html"
+OUTPUT_JSON = ROOT / "index-data.json"
 
-def collect_entries():
-    html_files = []
+def collect_structure():
+    tree = {}
     for root, dirs, files in os.walk(ROOT):
-        root_path = Path(root)
-        for file in files:
-            if file.endswith(".html") and file != "index.html":
-                file_path = root_path / file
-                rel_path = file_path.relative_to(ROOT).as_posix()
-                html_files.append(rel_path)
-    return sorted(html_files)
+        rel_root = Path(root).relative_to(ROOT)
+        parts = rel_root.parts
+        node = tree
+        for part in parts:
+            node = node.setdefault(part, {})
 
-def build_index(entries):
-    lines = [
-        "<!DOCTYPE html>",
-        "<html lang='zh'>",
-        "<head>",
-        "  <meta charset='UTF-8'>",
-        "  <meta name='viewport' content='width=device-width, initial-scale=1.0'>",
-        "  <title>📚 我的笔记索引</title>",
-        "  <style>",
-        "    body { font-family: sans-serif; padding: 2rem; background: #f9f9f9; }",
-        "    ul { list-style: none; padding-left: 1rem; }",
-        "    li { margin: 0.4rem 0; }",
-        "    a { text-decoration: none; color: #0366d6; }",
-        "    a:hover { text-decoration: underline; }",
-        "  </style>",
-        "</head>",
-        "<body>",
-        "  <h1>📚 我的笔记索引</h1>",
-        "  <ul>"
-    ]
+        html_files = [f for f in files if f.endswith(".html") and f != "index.html"]
+        if html_files:
+            node["__files__"] = [
+                {"name": f, "path": str(Path(root, f).relative_to(ROOT)).replace("\\", "/")}
+                for f in html_files
+            ]
+    return tree
 
-    for path in entries:
-        display = escape(path)
-        lines.append(f"    <li>{ICON} <a href='{path}'>{display}</a></li>")
+def write_json(tree):
+    with open(OUTPUT_JSON, "w", encoding="utf-8") as f:
+        json.dump(tree, f, indent=2, ensure_ascii=False)
 
-    lines += [
-        "  </ul>",
-        "</body>",
-        "</html>"
-    ]
+def write_html():
+    html = f"""<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>📚 我的笔记索引</title>
+  <script type="module" src="https://unpkg.com/vue@3.4.21/dist/vue.esm-browser.prod.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body.dark {{ background-color: #1f2937; color: #f9fafb; }}
+    a:hover {{ text-decoration: underline; }}
+    summary {{ cursor: pointer; }}
+  </style>
+</head>
+<body class="p-6 bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-gray-100">
+  <div id="app" class="max-w-4xl mx-auto">
+    <header class="flex justify-between items-center mb-4">
+      <h1 class="text-2xl font-bold">📚 我的笔记索引</h1>
+      <button @click="dark = !dark" class="text-sm px-3 py-1 bg-gray-300 dark:bg-gray-700 rounded">
+        切换主题
+      </button>
+    </header>
 
-    return "\n".join(lines)
+    <input type="text" v-model="search" placeholder="🔍 输入关键词搜索..." class="w-full px-4 py-2 mb-4 border rounded dark:bg-gray-700 dark:border-gray-600" />
+
+    <ul>
+      <tree-node :nodes="filteredTree" />
+    </ul>
+  </div>
+
+  <script type="module">
+    const {{ createApp, ref, computed }} = Vue;
+
+    const TreeNode = {{
+      name: 'TreeNode',
+      props: ['nodes'],
+      setup(props) {{
+        return {{ props }};
+      }},
+      template: `
+        <template v-for="(value, key) in props.nodes">
+          <li v-if="key === '__files__'">
+            <ul>
+              <li v-for="file in value" class="pl-4">
+                📄 <a :href="file.path" class="text-blue-500 hover:underline" target="_blank">{{ '{{' }} file.name {{ '}}' }}</a>
+              </li>
+            </ul>
+          </li>
+          <li v-else>
+            <details open class="mb-2">
+              <summary class="font-semibold">📁 {{ '{{' }} key {{ '}}' }}</summary>
+              <tree-node :nodes="value" />
+            </details>
+          </li>
+        </template>
+      `
+    }};
+
+    const app = createApp({{
+      components: {{ TreeNode }},
+      setup() {{
+        const search = ref('');
+        const dark = ref(false);
+        const tree = ref({{}});
+
+        fetch('index-data.json')
+          .then(res => res.json())
+          .then(data => {{ tree.value = data; }});
+
+        const filteredTree = computed(() => {{
+          const filterTree = (node) => {{
+            const newNode = {{}};
+            for (const key in node) {{
+              if (key === '__files__') {{
+                const files = node[key].filter(f =>
+                  f.name.toLowerCase().includes(search.value.toLowerCase())
+                );
+                if (files.length) newNode[key] = files;
+              }} else {{
+                const child = filterTree(node[key]);
+                if (Object.keys(child).length > 0) newNode[key] = child;
+              }}
+            }}
+            return newNode;
+          }};
+          return filterTree(structuredClone(tree.value));
+        }});
+
+        return {{ search, filteredTree, dark }};
+      }},
+    }});
+    app.mount('#app');
+  </script>
+</body>
+</html>
+"""
+    OUTPUT_HTML.write_text(html, encoding="utf-8")
 
 def main():
-    entries = collect_entries()
-    html = build_index(entries)
-    OUTPUT.write_text(html, encoding='utf-8')
-    print(f"✅ index.html 已生成，共 {len(entries)} 项")
+    tree = collect_structure()
+    write_json(tree)
+    write_html()
+    print("✅ 已生成 index.html 和 index-data.json")
 
 if __name__ == "__main__":
     main()
