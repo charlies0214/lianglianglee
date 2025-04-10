@@ -1,31 +1,28 @@
 import os
 import json
 from pathlib import Path
+from html import escape
 
-ROOT = Path(__file__).parent
+ROOT = Path(__file__).parent.resolve()
 OUTPUT_HTML = ROOT / "index.html"
 OUTPUT_JSON = ROOT / "index-data.json"
 
-def collect_structure():
+def scan_directory(path: Path):
     tree = {}
-    for root, dirs, files in os.walk(ROOT):
-        rel_root = Path(root).relative_to(ROOT)
-        parts = rel_root.parts
-        node = tree
-        for part in parts:
-            node = node.setdefault(part, {})
-
-        html_files = [f for f in files if f.endswith(".html") and f != "index.html"]
-        if html_files:
-            node["__files__"] = [
-                {"name": f, "path": str(Path(root, f).relative_to(ROOT)).replace("\\", "/")}
-                for f in html_files
-            ]
+    for item in sorted(path.iterdir()):
+        if item.name in [".git", ".github", "node_modules"]:
+            continue
+        if item.is_dir():
+            subtree = scan_directory(item)
+            if subtree:
+                tree[item.name] = subtree
+        elif item.suffix == ".html" and item.name != "index.html":
+            tree[item.name] = str(item.relative_to(ROOT)).replace("\\", "/")
     return tree
 
 def write_json(tree):
     with open(OUTPUT_JSON, "w", encoding="utf-8") as f:
-        json.dump(tree, f, indent=2, ensure_ascii=False)
+        json.dump(tree, f, ensure_ascii=False, indent=2)
 
 def write_html():
     html = f"""<!DOCTYPE html>
@@ -34,92 +31,159 @@ def write_html():
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>📚 我的笔记索引</title>
-  <script type="module" src="https://unpkg.com/vue@3.4.21/dist/vue.esm-browser.prod.js"></script>
-  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/lucide-static@latest/font/lucide.css">
   <style>
-    body.dark {{ background-color: #1f2937; color: #f9fafb; }}
+    body {{
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      margin: 0; padding: 0;
+      display: flex; height: 100vh; overflow: hidden;
+    }}
+    #sidebar {{
+      width: 320px; padding: 1rem; overflow-y: auto;
+      background: var(--bg); border-right: 1px solid #ccc;
+    }}
+    #main {{
+      flex: 1; padding: 2rem; overflow-y: auto;
+      background: var(--bg-alt);
+    }}
+    h1 {{ margin-top: 0; }}
+    .folder > summary {{ font-weight: bold; cursor: pointer; }}
+    .dark {{
+      --bg: #111;
+      --bg-alt: #181818;
+      --fg: #eee;
+    }}
+    .light {{
+      --bg: #fff;
+      --bg-alt: #f9f9f9;
+      --fg: #222;
+    }}
+    body {{
+      background: var(--bg);
+      color: var(--fg);
+    }}
+    a {{ color: #3b82f6; text-decoration: none; }}
     a:hover {{ text-decoration: underline; }}
-    summary {{ cursor: pointer; }}
+    .search-box {{
+      margin-bottom: 1rem;
+    }}
+    .active {{
+      font-weight: bold;
+      color: #16a34a;
+    }}
+    summary::marker {{
+      color: #999;
+    }}
+    .theme-toggle {{
+      cursor: pointer;
+      font-size: 0.9rem;
+      margin-bottom: 1rem;
+    }}
   </style>
 </head>
-<body class="p-6 bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-gray-100">
-  <div id="app" class="max-w-4xl mx-auto">
-    <header class="flex justify-between items-center mb-4">
-      <h1 class="text-2xl font-bold">📚 我的笔记索引</h1>
-      <button @click="dark = !dark" class="text-sm px-3 py-1 bg-gray-300 dark:bg-gray-700 rounded">
-        切换主题
-      </button>
-    </header>
-
-    <input type="text" v-model="search" placeholder="🔍 输入关键词搜索..." class="w-full px-4 py-2 mb-4 border rounded dark:bg-gray-700 dark:border-gray-600" />
-
-    <ul>
-      <tree-node :nodes="filteredTree" />
-    </ul>
+<body class="light">
+  <div id="sidebar">
+    <div class="theme-toggle">🌗 切换主题</div>
+    <div class="search-box">
+      <input type="text" id="search" placeholder="🔍 输入关键词搜索..." style="width:100%; padding:0.5rem;" />
+    </div>
+    <div id="tree">📁 正在加载目录...</div>
   </div>
+  <div id="main">
+    <h1>📚 我的笔记索引</h1>
+    <div id="preview">点击左侧目录查看内容</div>
+  </div>
+  <script>
+    const treeEl = document.getElementById('tree');
+    const previewEl = document.getElementById('preview');
+    const searchEl = document.getElementById('search');
 
-  <script type="module">
-    const {{ createApp, ref, computed }} = Vue;
+    function createNode(name, value) {{
+      if (typeof value === 'string') {{
+        const li = document.createElement('li');
+        const a = document.createElement('a');
+        a.href = '#' + value;
+        a.textContent = name;
+        li.appendChild(a);
+        return li;
+      }} else {{
+        const details = document.createElement('details');
+        details.classList.add('folder');
+        const summary = document.createElement('summary');
+        summary.textContent = name;
+        details.appendChild(summary);
+        const ul = document.createElement('ul');
+        for (const [k, v] of Object.entries(value)) {{
+          ul.appendChild(createNode(k, v));
+        }}
+        details.appendChild(ul);
+        return details;
+      }}
+    }}
 
-    const TreeNode = {{
-      name: 'TreeNode',
-      props: ['nodes'],
-      setup(props) {{
-        return {{ props }};
-      }},
-      template: `
-        <template v-for="(value, key) in props.nodes">
-          <li v-if="key === '__files__'">
-            <ul>
-              <li v-for="file in value" class="pl-4">
-                📄 <a :href="file.path" class="text-blue-500 hover:underline" target="_blank">{{ '{{' }} file.name {{ '}}' }}</a>
-              </li>
-            </ul>
-          </li>
-          <li v-else>
-            <details open class="mb-2">
-              <summary class="font-semibold">📁 {{ '{{' }} key {{ '}}' }}</summary>
-              <tree-node :nodes="value" />
-            </details>
-          </li>
-        </template>
-      `
+    function buildTree(data, keyword = '') {{
+      treeEl.innerHTML = '';
+      for (const [k, v] of Object.entries(data)) {{
+        const node = createNode(k, v);
+        if (keyword === '' || node.textContent.toLowerCase().includes(keyword.toLowerCase())) {{
+          treeEl.appendChild(node);
+        }}
+      }}
+    }}
+
+    function getIndexJsonUrl() {{
+      const parts = location.pathname.split('/');
+      const base = parts.slice(0, parts.indexOf('index.html')).join('/');
+      return base + '/index-data.json';
+    }}
+
+    async function init() {{
+      const res = await fetch(getIndexJsonUrl());
+      const data = await res.json();
+      buildTree(data);
+
+      if (location.hash) {{
+        const path = decodeURIComponent(location.hash.slice(1));
+        loadPage(path);
+      }}
+    }}
+
+    async function loadPage(path) {{
+      const res = await fetch(path);
+      let text = await res.text();
+      if (path.endsWith('.md') || path.includes('.md.html')) {{
+        if (window.marked) {{
+          text = marked.parse(text);
+        }}
+      }}
+      previewEl.innerHTML = text;
+      document.querySelectorAll('#tree a').forEach(a => {{
+        a.classList.toggle('active', a.getAttribute('href') === '#' + path);
+      }});
+    }}
+
+    searchEl.addEventListener('input', e => {{
+      init(); // 重建树
+    }});
+
+    window.addEventListener('hashchange', () => {{
+      const path = decodeURIComponent(location.hash.slice(1));
+      loadPage(path);
+    }});
+
+    document.querySelector('.theme-toggle').onclick = () => {{
+      document.body.classList.toggle('dark');
+      document.body.classList.toggle('light');
     }};
 
-    const app = createApp({{
-      components: {{ TreeNode }},
-      setup() {{
-        const search = ref('');
-        const dark = ref(false);
-        const tree = ref({{}});
+    init();
 
-        fetch('index-data.json')
-          .then(res => res.json())
-          .then(data => {{ tree.value = data; }});
-
-        const filteredTree = computed(() => {{
-          const filterTree = (node) => {{
-            const newNode = {{}};
-            for (const key in node) {{
-              if (key === '__files__') {{
-                const files = node[key].filter(f =>
-                  f.name.toLowerCase().includes(search.value.toLowerCase())
-                );
-                if (files.length) newNode[key] = files;
-              }} else {{
-                const child = filterTree(node[key]);
-                if (Object.keys(child).length > 0) newNode[key] = child;
-              }}
-            }}
-            return newNode;
-          }};
-          return filterTree(structuredClone(tree.value));
-        }});
-
-        return {{ search, filteredTree, dark }};
-      }},
+    import('https://cdn.jsdelivr.net/npm/marked/marked.min.js').then(() => {{
+      if (location.hash) {{
+        const path = decodeURIComponent(location.hash.slice(1));
+        loadPage(path);
+      }}
     }});
-    app.mount('#app');
   </script>
 </body>
 </html>
@@ -127,10 +191,12 @@ def write_html():
     OUTPUT_HTML.write_text(html, encoding="utf-8")
 
 def main():
-    tree = collect_structure()
+    print("📁 正在扫描目录...")
+    tree = scan_directory(ROOT)
+    print("✅ 文件结构采集完成，正在写入 index-data.json 和 index.html")
     write_json(tree)
     write_html()
-    print("✅ 已生成 index.html 和 index-data.json")
+    print("✅ 目录已生成！")
 
 if __name__ == "__main__":
     main()
